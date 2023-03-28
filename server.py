@@ -1,28 +1,43 @@
 import socket
+import threading
 
-# Set up a socket object
+host = 'localhost'
+port = 9999
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.bind((host, port))
+sock.listen()
+clients = []
 
-# Bind the socket to a local address and port number
-sock.bind(('localhost', 9999))
 
-# Listen for incoming connections
-sock.listen(1)
+def broadcast(message):
+    for client in clients:
+        client.send(message)
 
-# Wait for a client to connect
-print('Waiting for a client to connect...')
-conn, addr = sock.accept()
-print('Connected by', addr)
 
-# Receive and handle messages from the client
-while True:
-    data = conn.recv(1024).decode()
-    if not data:
-        break
-    print('Received message:', data)
+def handle_client(client):
+    while True:
+        try:
+            #test to see if over 1024 bytes triggers except clause
+            message = client.recv(1024)
+            broadcast(message)
+        except:
+            index = clients.index(client)
+            clients.remove(client)
+            client.close()
+            broadcast(f'A User has left the chat room!'.encode('utf-8'))
+            break
 
-    # Echo the message back to the client
-    conn.sendall(data.encode())
+def receive():
+    while True:
+        print('Server is running and listening ...')
+        client, address = sock.accept()
+        print(f'connection is established with {str(address)}')
+        clients.append(client)
+        broadcast(f'User has connected to the chat room'.encode('utf-8'))
+        client.send(' you are now connected!'.encode('utf-8'))
+        thread = threading.Thread(target=handle_client, args=(client,))
+        thread.start()
 
-# Close the connection
-conn.close()
+
+if __name__ == "__main__":
+    receive()
