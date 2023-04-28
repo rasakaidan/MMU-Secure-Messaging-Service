@@ -1,58 +1,115 @@
-import tkinter as tk
 import socket
 import threading
+import tkinter as tk
+from tkinter import messagebox, scrolledtext
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.backends import default_backend
+from cryptography.fernet import Fernet
 
-#TO DO LIST:
-# Setup server to handle several connections at once between clients
-# Add encryption 
-# 
-# Current setup is vulnerable to lots of stuff eg
-# Message injection: no input sanitisation, would be worse if we had a database where we kept the message logs and stuff
-# Man in the middle: Fixed by encryption
-# DOS: Can flood server with connection requests or lots of messages
-# Bufferoverflow: Don't know how messagebox works in tkinter 
-# Authentication: Attacker could emulate legitimate connection and gain unauthorised access to server
+SERVER = "10.0.2.15"
+PORT = 12345
+BUFFER_SIZE = 1024
 
+def generate_key_pair():
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend()
+    )
+    public_key = private_key.public_key()
+    return private_key, public_key
 
-class MessagingApp:
+def encrypt_message(public_key, message):
+    ciphertext = public_key.encrypt(
+        message,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return ciphertext
 
-    def __init__(self, master):
-        self.master = master
-        self.master.title("Chronos")
+def decrypt_message(private_key, message):
+    plaintext = private_key.decrypt(
+        message,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return plaintext
 
-        self.entry = tk.Entry(self.master)
-        self.entry.pack()
+def connect_to_server():
+    global client_socket, symmetric_cipher
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client_socket.connect((SERVER, PORT))
 
-        self.button = tk.Button(self.master, text="Send", command=self.send_message)
-        self.button.pack()
+    private_key, public_key = generate_key_pair()
+    pem_public_key = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
 
-        self.text = tk.Text(self.master)
-        self.text.pack()
+    client_socket.send(pem_public_key)
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    encrypted_symmetric_key = client_socket.recv(BUFFER_SIZE)
+    symmetric_key = decrypt_message(private_key, encrypted_symmetric_key)
+    symmetric_cipher = Fernet(symmetric_key)
 
-        # would chasnge localhost if we host server online, port number has to be same as server.
-        self.sock.connect(('localhost', 9999))
+    receive_thread = threading.Thread(target=receive_messages)
+    receive_thread.start()
 
-        self.thread = threading.Thread(target=self.receive_messages)
-        self.thread.daemon = True
-        self.thread.start()
+def receive_messages():
+    global client_socket, symmetric_cipher, chat_history
+    while True:
+        msg = client_socket.recv(BUFFER_SIZE)
+        if not msg:
+            break
+        decrypted_msg = symmetric_cipher.decrypt(msg)
+        chat_history.insert(tk.END, decrypted_msg.decode('utf-8') + "\n")
 
-    def receive_messages(self):
-        # Receive messages from the server and update the text area
-        while True:
-            data = self.sock.recv(1024).decode()
-            if not data:
-                break
-            # need to add a newline here after message - still not sure how textbox works
-            self.text.insert(tk.END, data)
+def send_message():
+    global client_socket, symmetric_cipher, input_field
+    msg = input_field.get()
+    input_field.delete(0, tk.END)
+    encrypted_msg = symmetric_cipher.encrypt(msg.encode('utf-8'))
+    client_socket.send(encrypted_msg)
 
-    # set message val to entrybox, encode then clear 
-    def send_message(self):
-        message = self.entry.get()
-        self.sock.sendall(message.encode())
-        self.entry.delete(0, tk.END)
+def on_closing():
+    global client_socket
+    client_socket.close()
+    root.quit()
 
-root = tk.Tk()
-app = MessagingApp(root)
-root.mainloop()
+def create_gui():
+    global root, chat_history, input_field
+
+    root = tk.Tk()
+    root.title("Secure Chat")
+
+    chat_frame = tk.Frame(root)
+    scrollbar = tk.Scrollbar(chat_frame)
+    chat_history = tk.Text(chat_frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+    chat_history.config(state=tk.DISABLED)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    chat_history.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    chat_frame.pack(fill=tk.BOTH, expand=True)
+
+    input_frame = tk.Frame(root)
+    input_field = tk.Entry(input_frame)
+    input_field.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    send_button = tk.Button(input_frame, text="Send", command=send_message)
+    send_button.pack(side=tk.RIGHT)
+    input_frame.pack(fill=tk.X)
+
+    connect_to_server()
+
+if __name__ == "__main__":
+    create_gui()
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
+
+     

@@ -1,43 +1,46 @@
 import socket
 import threading
 
-host = 'localhost'
-port = 9999
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.bind((host, port))
-sock.listen()
+SERVER = "127.0.0.1"
+PORT = 12345
+BUFFER_SIZE = 1024
 clients = []
 
+def handle_client(client_socket, addr):
+    global clients
+    print(f"[*] New connection from {addr}")
+    clients.append(client_socket)
 
-def broadcast(message):
+    try:
+        while True:
+            msg = client_socket.recv(BUFFER_SIZE)
+            if not msg:
+                break
+            broadcast_message(client_socket, msg)
+    finally:
+        clients.remove(client_socket)
+        client_socket.close()
+        print(f"[*] Connection closed from {addr}")
+
+def broadcast_message(sender, message):
+    global clients
     for client in clients:
-        client.send(message)
+        if client != sender:
+            client.send(message)
 
+def start_server():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((SERVER, PORT))
+    server_socket.listen(5)
+    print(f"[*] Listening on {SERVER}:{PORT}")
 
-def handle_client(client):
-    while True:
-        try:
-            #test to see if over 1024 bytes triggers except clause
-            message = client.recv(1024)
-            broadcast(message)
-        except:
-            index = clients.index(client)
-            clients.remove(client)
-            client.close()
-            broadcast(f'A User has left the chat room!'.encode('utf-8'))
-            break
-
-def receive():
-    while True:
-        print('Server is running and listening ...')
-        client, address = sock.accept()
-        print(f'connection is established with {str(address)}')
-        clients.append(client)
-        broadcast(f'User has connected to the chat room'.encode('utf-8'))
-        client.send(' you are now connected!'.encode('utf-8'))
-        thread = threading.Thread(target=handle_client, args=(client,))
-        thread.start()
-
+    try:
+        while True:
+            client_socket, addr = server_socket.accept()
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, addr))
+            client_thread.start()
+    finally:
+        server_socket.close()
 
 if __name__ == "__main__":
-    receive()
+    start_server()
