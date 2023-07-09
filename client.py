@@ -1,7 +1,7 @@
 import socket
 import threading
 import tkinter as tk
-from tkinter import messagebox, scrolledtext
+import queue
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives import serialization, hashes
@@ -44,9 +44,11 @@ def decrypt_message(private_key, message):
     return plaintext
 
 def connect_to_server():
-    global client_socket, symmetric_cipher
+    global client_socket, symmetric_cipher, message_queue
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print("Attempting to connect to server...")
     client_socket.connect((SERVER, PORT))
+    print("Connected to server.")
 
     private_key, public_key = generate_key_pair()
     pem_public_key = public_key.public_bytes(
@@ -60,6 +62,8 @@ def connect_to_server():
     symmetric_key = decrypt_message(private_key, encrypted_symmetric_key)
     symmetric_cipher = Fernet(symmetric_key)
 
+    message_queue.put("Connected")
+
     receive_thread = threading.Thread(target=receive_messages)
     receive_thread.start()
 
@@ -70,7 +74,11 @@ def receive_messages():
         if not msg:
             break
         decrypted_msg = symmetric_cipher.decrypt(msg)
+
+        chat_history.config(state=tk.NORMAL)
         chat_history.insert(tk.END, decrypted_msg.decode('utf-8') + "\n")
+        chat_history.config(state=tk.DISABLED)
+
 
 def send_message():
     global client_socket, symmetric_cipher, input_field
@@ -84,15 +92,34 @@ def on_closing():
     client_socket.close()
     root.quit()
 
+def update_gui():
+    global message_queue, chat_history, send_button, status_label
+    try:
+        msg = message_queue.get_nowait()
+        if msg == "Connected":
+            send_button.config(state=tk.NORMAL)
+            status_label.config(text="Connected")
+        else:
+            chat_history.config(state=tk.NORMAL)
+            chat_history.insert(tk.END, msg)
+            chat_history.config(state=tk.DISABLED)
+    except queue.Empty:
+        pass
+    finally:
+        root.after(100, update_gui)
+
+
 def create_gui():
-    global root, chat_history, input_field
+    global root, chat_history, input_field, send_button, status_label, message_queue
+
+    message_queue = queue.Queue()
 
     root = tk.Tk()
     root.title("Secure Chat")
 
     chat_frame = tk.Frame(root)
     scrollbar = tk.Scrollbar(chat_frame)
-    chat_history = tk.Text(chat_frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+    chat_history = tk.Text(chat_frame, wrap=tk.WORD, yscrollcommand=scrollbar.set, fg="black")
     chat_history.config(state=tk.DISABLED)
     scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     chat_history.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -101,15 +128,23 @@ def create_gui():
     input_frame = tk.Frame(root)
     input_field = tk.Entry(input_frame)
     input_field.pack(side=tk.LEFT, fill=tk.X, expand=True)
-    send_button = tk.Button(input_frame, text="Send", command=send_message)
+    send_button = tk.Button(input_frame, text="Send", command=send_message, state=tk.DISABLED)
     send_button.pack(side=tk.RIGHT)
+    status_label = tk.Label(input_frame, text="Connecting...")
+    status_label.pack(side=tk.RIGHT)
     input_frame.pack(fill=tk.X)
 
-    connect_to_server()
+    root.after(100, connect_to_server)
+    root.after(100, update_gui)
 
-if __name__ == "__main__":
-    create_gui()
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
 
-     
+
+if __name__ == "__main__":
+    create_gui()
+
+
+
+
+
